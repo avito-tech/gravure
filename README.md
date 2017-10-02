@@ -11,10 +11,15 @@ Such service was written in Rust at one of the internal hackatons at Avito.
 
 ## Setup
 
-- You will need rust building environment. It'is usually set up from your package manager or via [Rustup](https://www.rustup.rs/)
-- After you've got Rust, just run
+1. You will need rust building environment. It'is usually set up from your package manager or via [Rustup](https://www.rustup.rs/)
+1. After you've got Rust, just run
     `cargo build --release`
     and your binary is ready at `target/release` directory.
+
+## Contributing
+You can help the project by:
+* create PRs that solve issues or add new features
+* use the service at your site and create new issues if you happen to find any
 
 ## Notes
 If you have trouble with openssl on MacOS, do the following (you'll need [brew](http://brew.sh/)):
