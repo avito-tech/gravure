@@ -1,0 +1,28 @@
+[package]
+name = "avito_gravure"
+version = "0.0.1"
+authors = [ "Kirill Paltsev <kpaltsev@avito.ru>",
+"Aleksey Moiseev <amoiseev@avito.ru>",
+"Frol Kruchkov <fkuchkov@avito.ru>",
+"Sergey Noskov <snoskov@avito.ru>" ]
+description = "Microservice for image processing"
+license = "MIT"
+
+build = "build.rs"
+
+[dependencies]
+image = "~0.10"
+url="~1.2"
+serde = "~0.8"
+serde_json = "~0.8"
+"quick-error"="~1"
+"scoped-pool" = "~1"
+clap = "~2.16"
+hyper="~0.9"
+regex="~0.1"
+liquid="~0.8"
+multipart="~0.8"
+
+[build-dependencies]
+serde_codegen = "0.8"
+
