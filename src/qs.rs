@@ -42,41 +42,44 @@ impl Queue {
     }
 
     pub fn run(&self) {
-        self.thread_pool.scoped(|scope| {
-            loop {
-                match self.jobs_reader.lock().unwrap().recv() {
-                    Ok(job) => {
-                        println!("JOB START");
-                        scope.execute(move || {
+        self.thread_pool
+            .scoped(|scope| {
+                loop {
+                    match self.jobs_reader.lock().unwrap().recv() {
+                        Ok(job) => {
+                            println!("JOB START");
+                            scope.execute(move || {
 
-                            match self.run_job(&job) {
-                                Err(e) => {
-                                    println!("Error processing job: {:?}", e);
-                                }
-                                Ok(j) => j,
-                            };
-
-                            // Look mom: I draw a tree!
-                            if let Some(ref response) = job.response {
-                                let response = response.lock();
-                                match response {
-                                    Ok(response) => {
-                                        match response.send(()) {
-                                            Ok(()) => (),
-                                            Err(e) => println!("Error sending response: {:?}", e),
-                                        }
+                                match self.run_job(&job) {
+                                    Err(e) => {
+                                        println!("Error processing job: {:?}", e);
                                     }
-                                    Err(e) => println!("Error locking mutex: {:?}", e),
+                                    Ok(j) => j,
                                 };
-                            };
-                        });
-                    }
-                    Err(e) => {
-                        println!("Job receive error: {:?}", e);
-                        return;
-                    }
-                };
-            }
-        });
+
+                                // Look mom: I draw a tree!
+                                if let Some(ref response) = job.response {
+                                    let response = response.lock();
+                                    match response {
+                                        Ok(response) => {
+                                            match response.send(()) {
+                                                Ok(()) => (),
+                                                Err(e) => {
+                                                    println!("Error sending response: {:?}", e)
+                                                }
+                                            }
+                                        }
+                                        Err(e) => println!("Error locking mutex: {:?}", e),
+                                    };
+                                };
+                            });
+                        }
+                        Err(e) => {
+                            println!("Job receive error: {:?}", e);
+                            return;
+                        }
+                    };
+                }
+            });
     }
 }

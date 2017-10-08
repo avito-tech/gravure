@@ -3,7 +3,8 @@ use std::fs::File;
 use std::io::copy;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
-use std::hash::{Hash, SipHasher, Hasher};
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use errors::*;
@@ -67,16 +68,22 @@ impl GravureServer {
     }
 
     fn by_preset(&self, mut req: Request, preset_name: String, id: u64) -> Result<(), HttpError> {
-        let preset = try!(self.config.presets.get(&preset_name).ok_or(HttpError::UnknownPreset));
+        let preset = try!(self.config
+                              .presets
+                              .get(&preset_name)
+                              .ok_or(HttpError::UnknownPreset));
         for task in &preset.tasks {
             let (resp, _rx): (Option<Mutex<Sender<()>>>, Option<Receiver<()>>) = (Option::None,
                                                                                   Option::None);
 
-            let mut hasher = SipHasher::default();
+            let mut hasher = DefaultHasher::default();
 
             preset_name.hash(&mut hasher);
             id.hash(&mut hasher);
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().hash(&mut hasher);
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .hash(&mut hasher);
 
             let filename = self.upload_dir.clone() + "/" + &hasher.finish().to_string() + ".png";
 
@@ -85,11 +92,11 @@ impl GravureServer {
             println!("Received {:?} bytes", bytes);
 
             let job = Arc::new(Job {
-                image_id: id,
-                image_path: filename.to_string(),
-                task: task.clone(),
-                response: resp,
-            });
+                                   image_id: id,
+                                   image_path: filename.to_string(),
+                                   task: task.clone(),
+                                   response: resp,
+                               });
 
             match self.ch.lock() {
                 Ok(chan) => {

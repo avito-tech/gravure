@@ -33,10 +33,10 @@ impl ImageData {
         println!("ImageData: IMAGE FORMAT OK");
 
         Ok(ImageData {
-            image: img,
-            image_format: image_format,
-            id: image_id,
-        })
+               image: img,
+               image_format: image_format,
+               id: image_id,
+           })
     }
 
     fn get_format(image_path: String) -> Result<ImageFormat, ImageError> {
@@ -46,14 +46,14 @@ impl ImageData {
             .map_or("".to_string(), |s| s.to_ascii_lowercase());
 
         Ok(match &ext[..] {
-            "jpg" | "jpeg" => image::ImageFormat::JPEG,
-            "png" => image::ImageFormat::PNG,
-            format => {
-                return Err(image::ImageError::UnsupportedError(format!("Image format image/{:?} \
+               "jpg" | "jpeg" => image::ImageFormat::JPEG,
+               "png" => image::ImageFormat::PNG,
+               format => {
+                   return Err(image::ImageError::UnsupportedError(format!("Image format image/{:?} \
                                                                         is not supported.",
-                                                                       format)))
-            }
-        })
+                                                                          format)))
+               }
+           })
     }
 }
 
@@ -102,19 +102,21 @@ pub fn build_resizer(params: &Vec<String>) -> Result<Resizer, ActionError> {
     let height = try!(height.parse().map_err(|_| ActionError::Parameter));
 
     Ok(Resizer {
-        width: width,
-        height: height,
-        filter: FilterType::Gaussian,
-    })
+           width: width,
+           height: height,
+           filter: FilterType::Gaussian,
+       })
 }
 
 impl Resizer {
     pub fn run(&self, image_data: &mut ImageData) -> Result<ImageData, ActionError> {
         Ok(ImageData {
-            image: image_data.image.resize(self.width, self.height, self.filter),
-            image_format: image_data.image_format,
-            id: image_data.id,
-        })
+               image: image_data
+                   .image
+                   .resize(self.width, self.height, self.filter),
+               image_format: image_data.image_format,
+               id: image_data.id,
+           })
     }
 }
 
@@ -141,23 +143,25 @@ impl Saver {
             .map_err(|_| ActionError::Parameter));
 
         let extension = try!(match image_data.image_format {
-            ImageFormat::JPEG => Ok("jpg"),
-            ImageFormat::PNG => Ok("png"),
-            _ => {
+                                 ImageFormat::JPEG => Ok("jpg"),
+                                 ImageFormat::PNG => Ok("png"),
+                                 _ => {
                 Err(ActionError::Image(ImageError::UnsupportedError("Image format is not \
                                                                      supported."
                     .to_string())))
             }
-        });
+                             });
 
-        let path = try!(template.render(image_data.id, extension.to_owned())
-            .map_err(|e| ActionError::BadTemplate(e)));
+        let path = try!(template
+                            .render(image_data.id, extension.to_owned())
+                            .map_err(|e| ActionError::BadTemplate(e)));
         println!("SAVING to {:?}", path);
         let mut file = try!(File::create(path).map_err(|e| ActionError::Io(e)));
 
-        try!(image_data.image
-            .save(&mut file, image_data.image_format)
-            .map_err(|e| ActionError::Image(e)));
+        try!(image_data
+                 .image
+                 .save(&mut file, image_data.image_format)
+                 .map_err(|e| ActionError::Image(e)));
         Ok((*image_data).clone())
     }
 }
@@ -183,8 +187,9 @@ impl Uploader {
         let template = try!(PathTemplate::new(self.path_template.clone())
             .map_err(|_| ActionError::Parameter));
 
-        let path = try!(template.render(image_data.id, "jpg".to_owned())
-            .map_err(|e| ActionError::BadTemplate(e)));
+        let path = try!(template
+                            .render(image_data.id, "jpg".to_owned())
+                            .map_err(|e| ActionError::BadTemplate(e)));
 
         // let path = &self.path_template;
 
@@ -214,12 +219,16 @@ impl Uploader {
 
         // let mut file = try!(File::open(&file_path).map_err(|e| ActionError::Io(e)));
         let buf = image_data.image.raw_pixels();
-        multipart.write_stream("file", &mut buf.as_slice(), None, None).unwrap();
+        multipart
+            .write_stream("file", &mut buf.as_slice(), None, None)
+            .unwrap();
         //        multipart.write_stream("file", &mut buffer, None, None).unwrap();
 
         println!("Send file {:?}", image_data.id);
 
-        try!(multipart.send().map_err(|e| ActionError::HyperRequestError(e)));
+        try!(multipart
+                 .send()
+                 .map_err(|e| ActionError::HyperRequestError(e)));
 
         Ok((*image_data).clone())
     }
