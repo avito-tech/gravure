@@ -1,25 +1,28 @@
-use scoped_pool::Pool;
-
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::{Arc, Mutex};
 use config::Task;
 use actions::*;
 use errors::JobError;
 
+use std::sync::{Arc, Mutex};
+
+use scoped_pool::Pool;
+use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
+use futures::sync::oneshot;
+
+
 pub struct Queue {
     thread_pool: Pool,
-    jobs_reader: Mutex<Receiver<Arc<Job>>>,
+    jobs_reader: UnboundedReceiver<Job>,
 }
 
 pub struct Job {
     pub image_id: u64,
     pub image_path: String,
     pub task: Task,
-    pub response: Option<Mutex<Sender<()>>>,
+    pub response: Option<oneshot::Sender<()>>,
 }
 
 impl Queue {
-    pub fn new(pool_size: usize, jobs_reader: Receiver<Arc<Job>>) -> Queue {
+    pub fn new(pool_size: usize, jobs_reader: UnboundedReceiver<Job>) -> Queue {
         Queue {
             thread_pool: Pool::new(pool_size),
             jobs_reader: Mutex::new(jobs_reader),

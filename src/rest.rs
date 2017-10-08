@@ -8,21 +8,25 @@ use std::collections::hash_map::DefaultHasher;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use errors::*;
-
-use std::sync::mpsc::{Sender, Receiver};
 use qs::*;
 
-use hyper::server::{Handler, Request, Response};
-use hyper::uri::RequestUri;
-use hyper::status::StatusCode;
-
 use regex::Regex;
+use futures::Future;
+use futures::future::ok;
+use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
+use futures::sync::oneshot;
+use tokio_core::reactor::Handle;
+use hyper::{self, Uri, StatusCode};
+use hyper::header::ContentLength;
+use hyper::server::{Http, Request, Response, Service};
+
 
 pub struct GravureServer {
     pub config: Arc<Config>,
-    pub ch: Mutex<Sender<Arc<Job>>>,
+    pub ch: UnboundedSender<Job>,
     upload_dir: String,
     routes: Vec<(Regex, Route)>,
+    handle: Handle,
 }
 
 enum Route {
@@ -31,40 +35,40 @@ enum Route {
 }
 
 impl GravureServer {
-    pub fn new(config: Config, upload_dir: String, channel: Sender<Arc<Job>>) -> Self {
+    pub fn new(config: Config,
+               upload_dir: String,
+               channel: UnboundedSender<Job>,
+               handle: Handle)
+               -> Self {
         let mut routes = Vec::new();
         routes.push((Regex::new("^/v1/upload/([a-z0-9_]+)/([0-9]+)$").unwrap(), Route::ByPreset));
         routes.push((Regex::new("^/upload/test$").unwrap(), Route::UploadTest));
 
         GravureServer {
             config: Arc::new(config),
-            ch: Mutex::new(channel),
+            ch: channel,
             upload_dir: upload_dir,
             routes: routes,
+            handle: handle,
         }
     }
 
     fn route(&self, req: Request) -> Result<(), HttpError> {
-        if let RequestUri::AbsolutePath(s) = req.uri.clone() {
-            // TODO avoid clone
-            for &(ref re, ref route) in &self.routes {
-                if let Some(caps) = re.captures(&s) {
-                    match route {
-                        &Route::ByPreset => {
-                            let preset = try!(caps.at(1).ok_or(HttpError::UnknownURI)).to_string();
-                            let id = try!(caps.at(2).ok_or(HttpError::UnknownURI));
-                            let id = try!(id.parse().map_err(|_| HttpError::UnknownURI));
-                            return self.by_preset(req, preset, id);
-                        }
-                        &Route::UploadTest => return self.upload_test(req),
+        let uri = req.uri().path();
+        for &(ref re, ref route) in &self.routes {
+            if let Some(caps) = re.captures(uri) {
+                match route {
+                    &Route::ByPreset => {
+                        let preset = try!(caps.at(1).ok_or(HttpError::UnknownURI)).to_string();
+                        let id = try!(caps.at(2).ok_or(HttpError::UnknownURI));
+                        let id = try!(id.parse().map_err(|_| HttpError::UnknownURI));
+                        return self.by_preset(req, preset, id);
                     }
+                    &Route::UploadTest => return self.upload_test(req),
                 }
             }
-            Err(HttpError::UnknownURI)
-        } else {
-            Err(HttpError::UnknownURI)
         }
-
+        Err(HttpError::UnknownURI)
     }
 
     fn by_preset(&self, mut req: Request, preset_name: String, id: u64) -> Result<(), HttpError> {
@@ -73,8 +77,7 @@ impl GravureServer {
                               .get(&preset_name)
                               .ok_or(HttpError::UnknownPreset));
         for task in &preset.tasks {
-            let (resp, _rx): (Option<Mutex<Sender<()>>>, Option<Receiver<()>>) = (Option::None,
-                                                                                  Option::None);
+            let (resp, _rx) = oneshot::channel();
 
             let mut hasher = DefaultHasher::default();
 
@@ -88,7 +91,7 @@ impl GravureServer {
             let filename = self.upload_dir.clone() + "/" + &hasher.finish().to_string() + ".png";
 
             let mut file = try!(File::create(filename.clone()).map_err(|e| HttpError::Io(e)));
-            let bytes = try!(copy(&mut req, &mut file).map_err(|e| HttpError::Io(e)));
+            let bytes = try!(copy(&mut req.body(), &mut file).map_err(|e| HttpError::Io(e)));
             println!("Received {:?} bytes", bytes);
 
             let job = Arc::new(Job {
@@ -124,13 +127,22 @@ impl GravureServer {
     }
 }
 
-impl Handler for GravureServer {
-    fn handle(&self, req: Request, mut res: Response) {
+impl Service for GravureServer {
+    // boilerplate hooking up hyper's server types
+    type Request = Request;
+    type Response = Response;
+    type Error = hyper::Error;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+
+    fn call(&self, req: Request) -> Self::Future {
+        let mut resp = Response::new();
         if let Err(_e) = self.route(req) {
             println!("HTTP ERROR => {}", _e);
-            *res.status_mut() = StatusCode::BadRequest;
-        } else {
-            return;
+            resp.set_status(StatusCode::BadRequest);
         }
+        // We're currently ignoring the Request
+        // And returning an 'ok' Future, which means it's ready
+        // immediately, and build a Response with the 'PHRASE' body.
+        Box::new(ok(resp))
     }
 }

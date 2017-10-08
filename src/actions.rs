@@ -12,9 +12,8 @@ use image::ImageFormat;
 use image::FilterType;
 use image::ImageError;
 
-use hyper::Url;
+use hyper::Uri;
 use hyper::client::Request;
-use hyper::method::Method;
 use multipart::client::Multipart;
 
 #[derive(Clone)]
@@ -193,43 +192,43 @@ impl Uploader {
 
         // let path = &self.path_template;
 
-        println!("UPLOAD to {:?}", path);
+        println!("FAKE UPLOAD to {:?}", path);
 
-        let url = try!(Url::parse(&path).map_err(|e| ActionError::UrlParse(e)));
-        let request = try!(Request::new(Method::Post, url)
-            .map_err(|e| ActionError::HyperRequestError(e)));
+        //let url = try!(Uri::parse(&path).map_err(|e| ActionError::UrlParse(e)));
+        //let request = try!(Request::new(Method::Post, url)
+        //.map_err(|e| ActionError::HyperRequestError(e)));
 
-        let mut multipart = try!(Multipart::from_request(request)
-            .map_err(|e| ActionError::HyperRequestError(e)));
+        //let mut multipart = try!(Multipart::from_request(request)
+        //.map_err(|e| ActionError::HyperRequestError(e)));
 
-        //        let mut buffer = BufStream::new(&mut bf);
-        //        let dir = try!(TempDir::new("gravure").map_err(|e| ActionError::Io(e)));
-        //        let file_path = dir.path().join(image_data.id.to_string());
+        ////        let mut buffer = BufStream::new(&mut bf);
+        ////        let dir = try!(TempDir::new("gravure").map_err(|e| ActionError::Io(e)));
+        ////        let file_path = dir.path().join(image_data.id.to_string());
 
-        //  let id = image_data.id.to_string();
-        // let mut file_path = "/tmp/gravure_".to_string();
-        // file_path.push_str(&id);
+        ////  let id = image_data.id.to_string();
+        //// let mut file_path = "/tmp/gravure_".to_string();
+        //// file_path.push_str(&id);
 
-        // println!("Create temp file {:?}", file_path);
+        //// println!("Create temp file {:?}", file_path);
 
-        // let mut file = try!(File::create(&file_path).map_err(|e| ActionError::Io(e)));
+        //// let mut file = try!(File::create(&file_path).map_err(|e| ActionError::Io(e)));
 
-        // image_data.image.save(&mut file, ImageFormat::JPEG);
-        // /        image_data.image.save(&mut buffer, ImageFormat::JPEG);
+        //// image_data.image.save(&mut file, ImageFormat::JPEG);
+        //// /        image_data.image.save(&mut buffer, ImageFormat::JPEG);
 
-        // let mut file = try!(File::open(&file_path).map_err(|e| ActionError::Io(e)));
-        let buf = image_data.image.raw_pixels();
-        multipart
-            .write_stream("file", &mut buf.as_slice(), None, None)
-            .unwrap();
-        //        multipart.write_stream("file", &mut buffer, None, None).unwrap();
+        //// let mut file = try!(File::open(&file_path).map_err(|e| ActionError::Io(e)));
+        //let buf = image_data.image.raw_pixels();
+        //multipart
+        //.write_stream("file", &mut buf.as_slice(), None, None)
+        //.unwrap();
+        ////        multipart.write_stream("file", &mut buffer, None, None).unwrap();
 
-        println!("Send file {:?}", image_data.id);
+        //println!("Send file {:?}", image_data.id);
 
-        try!(multipart
-                 .send()
-                 .map_err(|e| ActionError::HyperRequestError(e)));
+        //try!(multipart
+        //.send()
+        //.map_err(|e| ActionError::HyperRequestError(e)));
 
-        Ok((*image_data).clone())
+        //Ok((*image_data).clone())
     }
 }

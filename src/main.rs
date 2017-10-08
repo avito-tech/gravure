@@ -8,6 +8,9 @@ extern crate serde_json;
 extern crate serde_derive;
 extern crate scoped_pool;
 extern crate clap;
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_io;
 extern crate hyper;
 extern crate regex;
 extern crate liquid;
@@ -24,13 +27,16 @@ use config::*;
 use std::fs::File;
 
 use qs::*;
-use std::sync::mpsc;
+use futures::sync::mpsc;
 use serde_json::from_reader;
+use futures::{Future, Sink, Stream};
+use tokio_core::net::TcpListener;
+use tokio_core::reactor::{Core, Handle};
 
 use std::thread;
 
 use clap::{Arg, App};
-use hyper::server::Server;
+use hyper::server::Http;
 
 fn main() {
 
@@ -67,11 +73,29 @@ fn main() {
         .parse()
         .unwrap();
 
-    let (job_s, job_r) = mpsc::channel();
-    let server = rest::GravureServer::new(config, "upload".to_owned(), job_s);
+    let (job_s, job_r) = mpsc::unbounded();
 
     let queue = Queue::new(threads, job_r);
-    let handle = thread::spawn(move || { queue.run(); });
-    Server::http(listen).unwrap().handle(server).unwrap();
-    handle.join().unwrap();
+    let threads = thread::spawn(move || { queue.run(); });
+
+    // Run event loop in main thread
+    let listen = listen.parse().unwrap();
+    // Create the event loop that will drive this server
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
+
+    // Bind the server's socket
+    let listener = TcpListener::bind(&listen, &handle).unwrap();
+    let server = listener
+        .incoming()
+        .for_each(|(sock, addr)| {
+                      let server = rest::GravureServer::new(config,
+                                                            "upload".to_string(),
+                                                            job_s,
+                                                            handle.clone());
+                      Http::new().bind_connection(&handle, sock, addr, server);
+                      Ok(())
+                  });
+    core.run(server).unwrap();
+    threads.join().unwrap();
 }

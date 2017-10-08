@@ -3,7 +3,6 @@ use std::collections::HashMap;
 
 use actions::*;
 
-//#include!(concat!(env!("OUT_DIR"), "/config_types.rs"));
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
     pub presets: HashMap<String, Preset>,
