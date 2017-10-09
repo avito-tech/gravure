@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use scoped_pool::Pool;
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 use futures::sync::oneshot;
+use futures::Stream;
 
 
 pub struct Queue {
@@ -25,7 +26,7 @@ impl Queue {
     pub fn new(pool_size: usize, jobs_reader: UnboundedReceiver<Job>) -> Queue {
         Queue {
             thread_pool: Pool::new(pool_size),
-            jobs_reader: Mutex::new(jobs_reader),
+            jobs_reader: jobs_reader,
         }
     }
 
@@ -46,43 +47,25 @@ impl Queue {
 
     pub fn run(&self) {
         self.thread_pool
-            .scoped(|scope| {
-                loop {
-                    match self.jobs_reader.lock().unwrap().recv() {
-                        Ok(job) => {
-                            println!("JOB START");
-                            scope.execute(move || {
+            .scoped(|scope| for job in self.jobs_reader.wait() {
+                        match job {
+                            Ok(job) => {
+                    println!("JOB START");
+                    scope.execute(move || {
+                        match self.run_job(&job) {
+                            Err(e) => {
+                                println!("Error processing job: {:?}", e);
+                            }
+                            Ok(j) => j,
+                        };
 
-                                match self.run_job(&job) {
-                                    Err(e) => {
-                                        println!("Error processing job: {:?}", e);
-                                    }
-                                    Ok(j) => j,
-                                };
-
-                                // Look mom: I draw a tree!
-                                if let Some(ref response) = job.response {
-                                    let response = response.lock();
-                                    match response {
-                                        Ok(response) => {
-                                            match response.send(()) {
-                                                Ok(()) => (),
-                                                Err(e) => {
-                                                    println!("Error sending response: {:?}", e)
-                                                }
-                                            }
-                                        }
-                                        Err(e) => println!("Error locking mutex: {:?}", e),
-                                    };
-                                };
-                            });
+                        if let Some(ref response) = job.response {
+                            response.complete(());
                         }
-                        Err(e) => {
-                            println!("Job receive error: {:?}", e);
-                            return;
-                        }
-                    };
+                    });
                 }
-            });
+                            Err(e) => println!("Error receiving job: {:?}", e),
+                        }
+                    });
     }
 }

@@ -34,6 +34,7 @@ use tokio_core::net::TcpListener;
 use tokio_core::reactor::{Core, Handle};
 
 use std::thread;
+use std::sync::Arc;
 
 use clap::{Arg, App};
 use hyper::server::Http;
@@ -65,6 +66,7 @@ fn main() {
     let config = File::open(config).unwrap();
     let mut config: Config = from_reader(config).unwrap();
     config.init().unwrap();
+    let config = Arc::new(config);
 
     let listen = matches.value_of("listen").unwrap_or("0.0.0.0:4444");
     let threads = matches
@@ -89,13 +91,14 @@ fn main() {
     let server = listener
         .incoming()
         .for_each(|(sock, addr)| {
-                      let server = rest::GravureServer::new(config,
+                      let server = rest::GravureServer::new(config.clone(),
                                                             "upload".to_string(),
-                                                            job_s,
+                                                            job_s.clone(),
                                                             handle.clone());
                       Http::new().bind_connection(&handle, sock, addr, server);
                       Ok(())
-                  });
+                  })
+        .then(|_| Ok::<(), ()>(()));
     core.run(server).unwrap();
     threads.join().unwrap();
 }

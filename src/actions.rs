@@ -194,6 +194,7 @@ impl Uploader {
 
         println!("FAKE UPLOAD to {:?}", path);
 
+        Err(ActionError::Run)
         //let url = try!(Uri::parse(&path).map_err(|e| ActionError::UrlParse(e)));
         //let request = try!(Request::new(Method::Post, url)
         //.map_err(|e| ActionError::HyperRequestError(e)));

@@ -105,5 +105,8 @@ quick_error! {
         Lock(desc: String) {
             description(desc)
         }
+        HyperError(e: HyperError) {
+            cause(e)
+        } 
     }
 }
