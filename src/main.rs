@@ -6,15 +6,16 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
-extern crate scoped_pool;
 extern crate clap;
 extern crate futures;
+extern crate futures_pool;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate hyper;
 extern crate regex;
 extern crate liquid;
 extern crate multipart;
+extern crate num_cpus;
 
 pub mod config;
 pub mod errors;
@@ -26,14 +27,13 @@ pub mod template;
 use config::*;
 use std::fs::File;
 
-use qs::*;
-use futures::sync::mpsc;
 use serde_json::from_reader;
-use futures::{Future, Sink, Stream};
-use tokio_core::net::TcpListener;
-use tokio_core::reactor::{Core, Handle};
+use futures::{Future, Stream};
 
-use std::thread;
+use futures_pool::Pool;
+use tokio_core::net::TcpListener;
+use tokio_core::reactor::Core;
+
 use std::sync::Arc;
 
 use clap::{Arg, App};
@@ -58,7 +58,7 @@ fn main() {
                  .short("n")
                  .long("threads")
                  .value_name("NUM")
-                 .help("number of thread")
+                 .help("number of threads for resizing pictures (use 0 for auto)")
                  .takes_value(true))
         .get_matches();
 
@@ -69,16 +69,16 @@ fn main() {
     let config = Arc::new(config);
 
     let listen = matches.value_of("listen").unwrap_or("0.0.0.0:4444");
-    let threads = matches
+    let mut threads = matches
         .value_of("threads")
-        .unwrap_or("8")
+        .unwrap_or("0")
         .parse()
         .unwrap();
 
-    let (job_s, job_r) = mpsc::unbounded();
-
-    let queue = Queue::new(threads, job_r);
-    let threads = thread::spawn(move || { queue.run(); });
+    if threads == 0 {
+        threads = num_cpus::get();
+    }
+    let (sender, mut pool) = Pool::builder().pool_size(threads).build();
 
     // Run event loop in main thread
     let listen = listen.parse().unwrap();
@@ -93,12 +93,13 @@ fn main() {
         .for_each(|(sock, addr)| {
                       let server = rest::GravureServer::new(config.clone(),
                                                             "upload".to_string(),
-                                                            job_s.clone(),
+                                                            sender.clone(),
                                                             handle.clone());
                       Http::new().bind_connection(&handle, sock, addr, server);
                       Ok(())
                   })
         .then(|_| Ok::<(), ()>(()));
     core.run(server).unwrap();
-    threads.join().unwrap();
+    pool.shutdown();
+    //threads.join().unwrap();
 }

@@ -12,10 +12,12 @@ use qs::*;
 
 use regex::Regex;
 use futures::{Future, Stream, Sink};
-use futures::future::ok;
+use futures::future::{ok, join_all};
 use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
 use futures::sync::oneshot;
+use futures_pool::Sender;
 use tokio_core::reactor::Handle;
+
 use hyper::{self, Uri, StatusCode};
 use hyper::header::ContentLength;
 use hyper::server::{Http, Request, Response, Service};
@@ -23,7 +25,7 @@ use hyper::server::{Http, Request, Response, Service};
 
 pub struct GravureServer {
     pub config: Arc<Config>,
-    pub ch: UnboundedSender<Job>,
+    pub ch: Sender, //UnboundedSender<Job>,
     upload_dir: String,
     routes: Vec<(Regex, Route)>,
     handle: Handle,
@@ -37,7 +39,8 @@ enum Route {
 impl GravureServer {
     pub fn new(config: Arc<Config>,
                upload_dir: String,
-               channel: UnboundedSender<Job>,
+               //channel: UnboundedSender<Job>,
+               channel: Sender,
                handle: Handle)
                -> Self {
         let mut routes = Vec::new();
@@ -73,13 +76,11 @@ impl GravureServer {
     }
 
     fn by_preset(&self, mut req: Request, preset_name: String, id: u64) -> Result<(), HttpError> {
+        if !self.config.presets.contains_key(&preset_name) {
+            return Err(HttpError::UnknownPreset);
+        }
+
         let config = self.config.clone();
-        let preset = try!(config
-                              .presets
-                              .get(&preset_name)
-                              .ok_or(HttpError::UnknownPreset));
-
-
         let (resp, _rx) = oneshot::channel::<Job>();
 
         let mut hasher = DefaultHasher::default();
@@ -104,6 +105,8 @@ impl GravureServer {
                                    })
                       })
             .and_then(move |_| {
+                //let mut sends = Vec::new();
+                let preset = config.presets.get(&preset_name).unwrap();
                 for task in &preset.tasks {
                     let job = Job {
                         image_id: id,
@@ -113,9 +116,11 @@ impl GravureServer {
                         response: None,
                     };
 
-                    chan.send(job);
-                    //       .map_err(|e| hyper::Error::Io(io::Error::new(io::ErrorKind::Other, e)))
+                    //sends.push(chan.send(job));
+                    job.spawn(chan.clone());
                 }
+
+                //join_all(sends).then(|_| Ok(()))
                 Ok(())
             });
         self.handle.spawn(read_body.then(|_| Ok(())));
