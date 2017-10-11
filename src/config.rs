@@ -1,5 +1,7 @@
 use errors::*;
 use std::collections::HashMap;
+//use futures_pool::Sender;
+use tokio_core::reactor::Remote as Sender;
 
 use actions::*;
 
@@ -29,11 +31,10 @@ pub struct Task {
 }
 
 impl Task {
-    fn init(&mut self) -> Result<(), ActionError> {
+    fn init(&mut self, executor: Sender) -> Result<(), ActionError> {
         for params in &self.actions_raw {
             try!(params.get(0).ok_or(ActionError::Parameter));
-            // let cmd = params.get(0).unwrap();
-            let action = Action::from_params(params).unwrap();
+            let action = Action::from_params(params, executor.clone()).unwrap();
             self.actions.push(action);
         }
         Ok(())
@@ -42,11 +43,10 @@ impl Task {
 
 // TODO: Enforce init somehow
 impl Config {
-    ///    MUST be applied to config before any actions on it
-    pub fn init(&mut self) -> Result<(), ConfigError> {
+    pub fn init(&mut self, executor: Sender) -> Result<(), ConfigError> {
         for (_, preset) in &mut self.presets {
             for task in &mut preset.tasks {
-                try!(task.init().map_err(ConfigError::Init));
+                try!(task.init(executor.clone()).map_err(ConfigError::Init));
             }
         }
         Ok(())

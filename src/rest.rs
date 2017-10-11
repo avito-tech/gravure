@@ -1,8 +1,7 @@
 use config::Config;
 use std::fs::File;
-use std::io::{self, Write, copy};
-use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::sync::Arc;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,21 +10,19 @@ use errors::*;
 use qs::*;
 
 use regex::Regex;
-use futures::{Future, Stream, Sink};
-use futures::future::{ok, join_all};
-use futures::sync::mpsc::{UnboundedSender, UnboundedReceiver};
+use futures::{Future, Stream};
+use futures::future::ok;
 use futures::sync::oneshot;
 use futures_pool::Sender;
 use tokio_core::reactor::Handle;
 
-use hyper::{self, Uri, StatusCode};
-use hyper::header::ContentLength;
-use hyper::server::{Http, Request, Response, Service};
+use hyper::{self, StatusCode};
+use hyper::server::{Request, Response, Service};
 
 
 pub struct GravureServer {
     pub config: Arc<Config>,
-    pub ch: Sender, //UnboundedSender<Job>,
+    pub ch: Sender,
     upload_dir: String,
     routes: Vec<(Regex, Route)>,
     handle: Handle,
@@ -37,12 +34,7 @@ enum Route {
 }
 
 impl GravureServer {
-    pub fn new(config: Arc<Config>,
-               upload_dir: String,
-               //channel: UnboundedSender<Job>,
-               channel: Sender,
-               handle: Handle)
-               -> Self {
+    pub fn new(config: Arc<Config>, upload_dir: String, channel: Sender, handle: Handle) -> Self {
         let mut routes = Vec::new();
         routes.push((Regex::new("^/v1/upload/([a-z0-9_]+)/([0-9]+)$").unwrap(), Route::ByPreset));
         routes.push((Regex::new("^/upload/test$").unwrap(), Route::UploadTest));
@@ -75,13 +67,13 @@ impl GravureServer {
         Err(HttpError::UnknownURI)
     }
 
-    fn by_preset(&self, mut req: Request, preset_name: String, id: u64) -> Result<(), HttpError> {
+    fn by_preset(&self, req: Request, preset_name: String, id: u64) -> Result<(), HttpError> {
         if !self.config.presets.contains_key(&preset_name) {
             return Err(HttpError::UnknownPreset);
         }
 
         let config = self.config.clone();
-        let (resp, _rx) = oneshot::channel::<Job>();
+        let (_resp, _rx) = oneshot::channel::<Job>();
 
         let mut hasher = DefaultHasher::default();
         preset_name.hash(&mut hasher);
@@ -105,8 +97,8 @@ impl GravureServer {
                                    })
                       })
             .and_then(move |_| {
-                //let mut sends = Vec::new();
                 let preset = config.presets.get(&preset_name).unwrap();
+                // TODO: think when notification needs and does it
                 for task in &preset.tasks {
                     let job = Job {
                         image_id: id,
@@ -116,19 +108,17 @@ impl GravureServer {
                         response: None,
                     };
 
-                    //sends.push(chan.send(job));
                     job.spawn(chan.clone());
                 }
 
-                //join_all(sends).then(|_| Ok(()))
                 Ok(())
             });
         self.handle.spawn(read_body.then(|_| Ok(())));
         Ok(())
     }
 
-    fn upload_test(&self, mut req: Request) -> Result<(), HttpError> {
-        let filename = "upload/result/image.png";
+    fn upload_test(&self, req: Request) -> Result<(), HttpError> {
+        let filename = "upload/image.png";
         let mut file = try!(File::create(filename).map_err(|e| HttpError::Io(e)));
         let read_body = req.body()
             .for_each(move |chunk| {
@@ -144,7 +134,6 @@ impl GravureServer {
 }
 
 impl Service for GravureServer {
-    // boilerplate hooking up hyper's server types
     type Request = Request;
     type Response = Response;
     type Error = hyper::Error;
@@ -156,9 +145,6 @@ impl Service for GravureServer {
             println!("HTTP ERROR => {}", _e);
             resp.set_status(StatusCode::BadRequest);
         }
-        // We're currently ignoring the Request
-        // And returning an 'ok' Future, which means it's ready
-        // immediately, and build a Response with the 'PHRASE' body.
         Box::new(ok(resp))
     }
 }

@@ -5,6 +5,7 @@ use std::ascii::AsciiExt;
 use std::path::Path;
 use std::fs::File;
 use std::string::String;
+use std::str::FromStr;
 
 use image;
 use image::DynamicImage;
@@ -12,8 +13,11 @@ use image::ImageFormat;
 use image::FilterType;
 use image::ImageError;
 
-use hyper::Uri;
-use hyper::client::Request;
+//use futures_pool::Sender;
+use futures::Future;
+use tokio_core::reactor::Remote as Sender;
+use hyper::{Uri, Method, StatusCode};
+use hyper::client::{Request, Client, HttpConnector};
 use multipart::client::Multipart;
 
 #[derive(Clone)]
@@ -58,28 +62,35 @@ impl ImageData {
 
 
 #[derive(Clone)]
-pub enum Action {
+pub enum ActionKind {
     Resize(Resizer),
     Save(Saver),
     Upload(Uploader),
 }
 
+#[derive(Clone)]
+pub struct Action {
+    kind: ActionKind,
+    executor: Sender,
+}
+
 impl Action {
-    pub fn from_params(params: &Vec<String>) -> Result<Self, ActionError> {
+    pub fn from_params(params: &Vec<String>, executor: Sender) -> Result<Self, ActionError> {
         let cmd = try!(params.get(0).ok_or(ActionError::Parameter));
-        match cmd.as_str() {
-            "resize" => Ok(Action::Resize(try!(build_resizer(params)))),
-            "save" => Ok(Action::Save(try!(build_saver(params)))),
-            "upload" => Ok(Action::Upload(try!(build_uploader(params)))),
+        let kind = match cmd.as_str() {
+            "resize" => Ok(ActionKind::Resize(try!(build_resizer(params)))),
+            "save" => Ok(ActionKind::Save(try!(build_saver(params)))),
+            "upload" => Ok(ActionKind::Upload(try!(build_uploader(params)))),
             _ => Err(ActionError::Wrong),
-        }
+        }?;
+        Ok(Self { kind, executor })
     }
 
     pub fn run(&self, image_data: &mut ImageData) -> Result<ImageData, ActionError> {
-        match self {
-            &Action::Resize(ref r) => r.run(image_data),
-            &Action::Save(ref s) => s.run(image_data),
-            &Action::Upload(ref u) => u.run(image_data),
+        match &self.kind {
+            &ActionKind::Resize(ref r) => r.run(image_data),
+            &ActionKind::Save(ref s) => s.run(image_data),
+            &ActionKind::Upload(ref u) => u.run(image_data, self.executor.clone()),
         }
     }
 }
@@ -182,7 +193,10 @@ pub fn build_uploader(params: &Vec<String>) -> Result<Uploader, ActionError> {
 }
 
 impl Uploader {
-    pub fn run(&self, image_data: &mut ImageData) -> Result<ImageData, ActionError> {
+    pub fn run(&self,
+               image_data: &mut ImageData,
+               executor: Sender)
+               -> Result<ImageData, ActionError> {
         let template = try!(PathTemplate::new(self.path_template.clone())
             .map_err(|_| ActionError::Parameter));
 
@@ -192,27 +206,36 @@ impl Uploader {
 
         // let path = &self.path_template;
 
-        println!("FAKE UPLOAD to {:?}", path);
+        let uri = try!(Uri::from_str(&path).map_err(|e| ActionError::UrlParse(e)));
+        let mut body = Vec::new();
+        try!(image_data
+                 .image
+                 .save(&mut body, image_data.image_format)
+                 .map_err(|e| ActionError::Image(e)));
+        executor.spawn(move |handle| {
+            let client = Client::configure()
+                .connector(HttpConnector::new(1, &handle))
+                .build(&handle);
+            let mut request = Request::new(Method::Post, uri);
+            request.set_body(body);
+            let future = client
+                .request(request)
+                .and_then(|ref response| {
+                              if let StatusCode::Ok = response.status() {
+                                  println!("UPLOAD OK");
+                              } else {
+                                  println!("UPLOAD FAILED: {:?}", response);
+                              };
+                              Ok(())
+                          })
+                .then(|_| Ok(())); // TODO log error
+            future
 
-        Err(ActionError::Run)
-        //let url = try!(Uri::parse(&path).map_err(|e| ActionError::UrlParse(e)));
-        //let request = try!(Request::new(Method::Post, url)
-        //.map_err(|e| ActionError::HyperRequestError(e)));
+        });
 
+        //Err(ActionError::Run)
         //let mut multipart = try!(Multipart::from_request(request)
         //.map_err(|e| ActionError::HyperRequestError(e)));
-
-        ////        let mut buffer = BufStream::new(&mut bf);
-        ////        let dir = try!(TempDir::new("gravure").map_err(|e| ActionError::Io(e)));
-        ////        let file_path = dir.path().join(image_data.id.to_string());
-
-        ////  let id = image_data.id.to_string();
-        //// let mut file_path = "/tmp/gravure_".to_string();
-        //// file_path.push_str(&id);
-
-        //// println!("Create temp file {:?}", file_path);
-
-        //// let mut file = try!(File::create(&file_path).map_err(|e| ActionError::Io(e)));
 
         //// image_data.image.save(&mut file, ImageFormat::JPEG);
         //// /        image_data.image.save(&mut buffer, ImageFormat::JPEG);
@@ -230,6 +253,6 @@ impl Uploader {
         //.send()
         //.map_err(|e| ActionError::HyperRequestError(e)));
 
-        //Ok((*image_data).clone())
+        Ok((*image_data).clone())
     }
 }

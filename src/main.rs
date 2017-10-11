@@ -62,11 +62,9 @@ fn main() {
                  .takes_value(true))
         .get_matches();
 
-    let config = matches.value_of("config").unwrap_or("config_test.json");
-    let config = File::open(config).unwrap();
-    let mut config: Config = from_reader(config).unwrap();
-    config.init().unwrap();
-    let config = Arc::new(config);
+    // Create the event loop that will drive this server
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
 
     let listen = matches.value_of("listen").unwrap_or("0.0.0.0:4444");
     let mut threads = matches
@@ -80,11 +78,14 @@ fn main() {
     }
     let (sender, mut pool) = Pool::builder().pool_size(threads).build();
 
+    let config = matches.value_of("config").unwrap_or("config_test.json");
+    let config = File::open(config).unwrap();
+    let mut config: Config = from_reader(config).unwrap();
+    config.init(core.remote()).unwrap();
+    let config = Arc::new(config);
+
     // Run event loop in main thread
     let listen = listen.parse().unwrap();
-    // Create the event loop that will drive this server
-    let mut core = Core::new().unwrap();
-    let handle = core.handle();
 
     // Bind the server's socket
     let listener = TcpListener::bind(&listen, &handle).unwrap();
