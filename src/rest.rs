@@ -1,28 +1,31 @@
 use config::Config;
 use std::fs::File;
-use std::io::copy;
-use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::sync::Arc;
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use errors::*;
-
-use std::sync::mpsc::{Sender, Receiver};
 use qs::*;
 
-use hyper::server::{Handler, Request, Response};
-use hyper::uri::RequestUri;
-use hyper::status::StatusCode;
-
 use regex::Regex;
+use futures::{Future, Stream};
+use futures::future::ok;
+use futures::sync::oneshot;
+use futures_pool::Sender;
+use tokio_core::reactor::Handle;
+
+use hyper::{self, StatusCode};
+use hyper::server::{Request, Response, Service};
+
 
 pub struct GravureServer {
     pub config: Arc<Config>,
-    pub ch: Mutex<Sender<Arc<Job>>>,
+    pub ch: Sender,
     upload_dir: String,
     routes: Vec<(Regex, Route)>,
+    handle: Handle,
 }
 
 enum Route {
@@ -31,106 +34,117 @@ enum Route {
 }
 
 impl GravureServer {
-    pub fn new(config: Config, upload_dir: String, channel: Sender<Arc<Job>>) -> Self {
+    pub fn new(config: Arc<Config>, upload_dir: String, channel: Sender, handle: Handle) -> Self {
         let mut routes = Vec::new();
         routes.push((Regex::new("^/v1/upload/([a-z0-9_]+)/([0-9]+)$").unwrap(), Route::ByPreset));
         routes.push((Regex::new("^/upload/test$").unwrap(), Route::UploadTest));
 
         GravureServer {
-            config: Arc::new(config),
-            ch: Mutex::new(channel),
+            config: config,
+            ch: channel,
             upload_dir: upload_dir,
             routes: routes,
+            handle: handle,
         }
     }
 
     fn route(&self, req: Request) -> Result<(), HttpError> {
-        if let RequestUri::AbsolutePath(s) = req.uri.clone() {
-            // TODO avoid clone
-            for &(ref re, ref route) in &self.routes {
-                if let Some(caps) = re.captures(&s) {
-                    match route {
-                        &Route::ByPreset => {
-                            let preset = try!(caps.at(1).ok_or(HttpError::UnknownURI)).to_string();
-                            let id = try!(caps.at(2).ok_or(HttpError::UnknownURI));
-                            let id = try!(id.parse().map_err(|_| HttpError::UnknownURI));
-                            return self.by_preset(req, preset, id);
-                        }
-                        &Route::UploadTest => return self.upload_test(req),
+        let uri = req.uri().clone();
+        let uri = uri.path();
+        for &(ref re, ref route) in &self.routes {
+            if let Some(caps) = re.captures(uri) {
+                match route {
+                    &Route::ByPreset => {
+                        let preset = try!(caps.at(1).ok_or(HttpError::UnknownURI)).to_string();
+                        let id = try!(caps.at(2).ok_or(HttpError::UnknownURI));
+                        let id = try!(id.parse().map_err(|_| HttpError::UnknownURI));
+                        return self.by_preset(req, preset, id);
                     }
+                    &Route::UploadTest => return self.upload_test(req),
                 }
             }
-            Err(HttpError::UnknownURI)
-        } else {
-            Err(HttpError::UnknownURI)
         }
-
+        Err(HttpError::UnknownURI)
     }
 
-    fn by_preset(&self, mut req: Request, preset_name: String, id: u64) -> Result<(), HttpError> {
-        let preset = try!(self.config
-                              .presets
-                              .get(&preset_name)
-                              .ok_or(HttpError::UnknownPreset));
-        for task in &preset.tasks {
-            let (resp, _rx): (Option<Mutex<Sender<()>>>, Option<Receiver<()>>) = (Option::None,
-                                                                                  Option::None);
-
-            let mut hasher = DefaultHasher::default();
-
-            preset_name.hash(&mut hasher);
-            id.hash(&mut hasher);
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .hash(&mut hasher);
-
-            let filename = self.upload_dir.clone() + "/" + &hasher.finish().to_string() + ".png";
-
-            let mut file = try!(File::create(filename.clone()).map_err(|e| HttpError::Io(e)));
-            let bytes = try!(copy(&mut req, &mut file).map_err(|e| HttpError::Io(e)));
-            println!("Received {:?} bytes", bytes);
-
-            let job = Arc::new(Job {
-                                   image_id: id,
-                                   image_path: filename.to_string(),
-                                   task: task.clone(),
-                                   response: resp,
-                               });
-
-            match self.ch.lock() {
-                Ok(chan) => {
-                    match chan.send(job) {
-                        Err(e) => {
-                            return Err(HttpError::Send(e.description().to_string()));
-                        }
-                        Ok(()) => println!("Match OK"),
-                    }
-                }
-                Err(e) => {
-                    return Err(HttpError::Lock(e.description().to_string()));
-                }
-            };
+    fn by_preset(&self, req: Request, preset_name: String, id: u64) -> Result<(), HttpError> {
+        if !self.config.presets.contains_key(&preset_name) {
+            return Err(HttpError::UnknownPreset);
         }
+
+        let config = self.config.clone();
+        let (_resp, _rx) = oneshot::channel::<Job>();
+
+        let mut hasher = DefaultHasher::default();
+        preset_name.hash(&mut hasher);
+        id.hash(&mut hasher);
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .hash(&mut hasher);
+        let hash_str = hasher.finish().to_string();
+
+        let filename = self.upload_dir.clone() + "/" + &hash_str + ".png";
+
+        let mut file = try!(File::create(filename.clone()).map_err(|e| HttpError::Io(e)));
+        let chan = self.ch.clone();
+        let read_body = req.body()
+            .for_each(move |chunk| {
+                          file.write(chunk.as_ref())
+                              .map_err(|e| hyper::Error::Io(e))
+                              .map(|bytes| {
+                                       println!("Received {:?} bytes", bytes);
+                                   })
+                      })
+            .and_then(move |_| {
+                let preset = config.presets.get(&preset_name).unwrap();
+                // TODO: think when notification needs and does it
+                for task in &preset.tasks {
+                    let job = Job {
+                        image_id: id,
+                        image_path: filename.to_string(),
+                        task: task.clone(),
+                        //response: Some(resp),
+                        response: None,
+                    };
+
+                    job.spawn(chan.clone());
+                }
+
+                Ok(())
+            });
+        self.handle.spawn(read_body.then(|_| Ok(())));
         Ok(())
     }
 
-    fn upload_test(&self, mut req: Request) -> Result<(), HttpError> {
-        let filename = "upload/result/image.png";
+    fn upload_test(&self, req: Request) -> Result<(), HttpError> {
+        let filename = "upload/image.png";
         let mut file = try!(File::create(filename).map_err(|e| HttpError::Io(e)));
-        let bytes = try!(copy(&mut req, &mut file).map_err(|e| HttpError::Io(e)));
-        println!("Received {:?} bytes", bytes);
+        let read_body = req.body()
+            .for_each(move |chunk| {
+                          file.write(chunk.as_ref())
+                              .map_err(|e| hyper::Error::Io(e))
+                              .map(|bytes| {
+                                       println!("Received {:?} bytes", bytes);
+                                   })
+                      });
+        self.handle.spawn(read_body.then(|_| Ok(())));
         Ok(())
     }
 }
 
-impl Handler for GravureServer {
-    fn handle(&self, req: Request, mut res: Response) {
+impl Service for GravureServer {
+    type Request = Request;
+    type Response = Response;
+    type Error = hyper::Error;
+    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+
+    fn call(&self, req: Request) -> Self::Future {
+        let mut resp = Response::new();
         if let Err(_e) = self.route(req) {
             println!("HTTP ERROR => {}", _e);
-            *res.status_mut() = StatusCode::BadRequest;
-        } else {
-            return;
+            resp.set_status(StatusCode::BadRequest);
         }
+        Box::new(ok(resp))
     }
 }

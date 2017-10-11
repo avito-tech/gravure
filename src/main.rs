@@ -6,12 +6,16 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use]
 extern crate serde_derive;
-extern crate scoped_pool;
 extern crate clap;
+extern crate futures;
+extern crate futures_pool;
+extern crate tokio_core;
+extern crate tokio_io;
 extern crate hyper;
 extern crate regex;
 extern crate liquid;
 extern crate multipart;
+extern crate num_cpus;
 
 pub mod config;
 pub mod errors;
@@ -23,14 +27,17 @@ pub mod template;
 use config::*;
 use std::fs::File;
 
-use qs::*;
-use std::sync::mpsc;
 use serde_json::from_reader;
+use futures::{Future, Stream};
 
-use std::thread;
+use futures_pool::Pool;
+use tokio_core::net::TcpListener;
+use tokio_core::reactor::Core;
+
+use std::sync::Arc;
 
 use clap::{Arg, App};
-use hyper::server::Server;
+use hyper::server::Http;
 
 fn main() {
 
@@ -51,27 +58,49 @@ fn main() {
                  .short("n")
                  .long("threads")
                  .value_name("NUM")
-                 .help("number of thread")
+                 .help("number of threads for resizing pictures (use 0 for auto)")
                  .takes_value(true))
         .get_matches();
+
+    // Create the event loop that will drive this server
+    let mut core = Core::new().unwrap();
+    let handle = core.handle();
+
+    let listen = matches.value_of("listen").unwrap_or("0.0.0.0:4444");
+    let mut threads = matches
+        .value_of("threads")
+        .unwrap_or("0")
+        .parse()
+        .unwrap();
+
+    if threads == 0 {
+        threads = num_cpus::get();
+    }
+    let (sender, mut pool) = Pool::builder().pool_size(threads).build();
 
     let config = matches.value_of("config").unwrap_or("config_test.json");
     let config = File::open(config).unwrap();
     let mut config: Config = from_reader(config).unwrap();
-    config.init().unwrap();
+    config.init(core.remote()).unwrap();
+    let config = Arc::new(config);
 
-    let listen = matches.value_of("listen").unwrap_or("0.0.0.0:4444");
-    let threads = matches
-        .value_of("threads")
-        .unwrap_or("8")
-        .parse()
-        .unwrap();
+    // Run event loop in main thread
+    let listen = listen.parse().unwrap();
 
-    let (job_s, job_r) = mpsc::channel();
-    let server = rest::GravureServer::new(config, "upload".to_owned(), job_s);
-
-    let queue = Queue::new(threads, job_r);
-    let handle = thread::spawn(move || { queue.run(); });
-    Server::http(listen).unwrap().handle(server).unwrap();
-    handle.join().unwrap();
+    // Bind the server's socket
+    let listener = TcpListener::bind(&listen, &handle).unwrap();
+    let server = listener
+        .incoming()
+        .for_each(|(sock, addr)| {
+                      let server = rest::GravureServer::new(config.clone(),
+                                                            "upload".to_string(),
+                                                            sender.clone(),
+                                                            handle.clone());
+                      Http::new().bind_connection(&handle, sock, addr, server);
+                      Ok(())
+                  })
+        .then(|_| Ok::<(), ()>(()));
+    core.run(server).unwrap();
+    pool.shutdown();
+    //threads.join().unwrap();
 }

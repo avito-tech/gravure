@@ -1,8 +1,8 @@
 use std::io::Error as IoError;
 use liquid::Error as LiquidError;
 use image::ImageError;
-use url::ParseError as UrlParseError;
 use hyper::Error as HyperError;
+use hyper::error::UriError as UriParseError;
 
 quick_error! {
     #[derive(Debug)]
@@ -27,7 +27,7 @@ quick_error! {
         Image(e: ImageError){
            cause(e)
         }
-        UrlParse(e: UrlParseError) {
+        UrlParse(e: UriParseError) {
             cause(e)
         }
         HyperRequestError(e: HyperError) {
@@ -91,7 +91,7 @@ quick_error! {
 
         Io (e: IoError) {
             cause(e)
-                description("IO error")
+            description(e.description())
         }
 
         UnknownPreset {
@@ -105,5 +105,8 @@ quick_error! {
         Lock(desc: String) {
             description(desc)
         }
+        HyperError(e: HyperError) {
+            cause(e)
+        } 
     }
 }

@@ -1,85 +1,44 @@
-use scoped_pool::Pool;
-
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::{Arc, Mutex};
 use config::Task;
 use actions::*;
 use errors::JobError;
 
-pub struct Queue {
-    thread_pool: Pool,
-    jobs_reader: Mutex<Receiver<Arc<Job>>>,
-}
+use futures::sync::oneshot;
+use futures::Future;
+use futures::future::lazy;
+use futures_pool::Sender;
 
 pub struct Job {
     pub image_id: u64,
     pub image_path: String,
     pub task: Task,
-    pub response: Option<Mutex<Sender<()>>>,
+    pub response: Option<oneshot::Sender<()>>,
 }
 
-impl Queue {
-    pub fn new(pool_size: usize, jobs_reader: Receiver<Arc<Job>>) -> Queue {
-        Queue {
-            thread_pool: Pool::new(pool_size),
-            jobs_reader: Mutex::new(jobs_reader),
-        }
+impl Job {
+    pub fn spawn(self, executor: Sender) {
+        oneshot::spawn(lazy(move || self.run()).map(|response| if let Some(response) = response {
+                                                        response.send(())
+                                                           .unwrap_or_else(|_| {
+                                                               println!("JOB RESPONSE NOT SENT");
+                                                           });
+                                                    }),
+                       &executor);
     }
 
-    pub fn run_job(&self, job: &Job) -> Result<(), JobError> {
-        println!("QS JO: {:?}", job.image_path);
-        // let mut img = try!(image::open(job.image_path.clone()).map_err(|e| JobError::Image(e)));
-
-        let mut imgd = try!(ImageData::new(job.image_path.clone(), job.image_id)
-            .map_err(|e| JobError::Image(e)));
+    fn run(self) -> Result<Option<oneshot::Sender<()>>, JobError> {
+        let Job {
+            image_id,
+            image_path,
+            task,
+            response,
+        } = self;
+        println!("QS JOB: {:?}", image_path);
+        let mut imgd = try!(ImageData::new(image_path, image_id).map_err(|e| JobError::Image(e)));
         println!("QS IMAGE_DATA OK");
 
-        for action in job.task.actions.iter() {
+        for action in task.actions.iter() {
             imgd = try!(action.run(&mut imgd).map_err(|e| JobError::Action(e)));
         }
-
-        Ok(())
-    }
-
-    pub fn run(&self) {
-        self.thread_pool
-            .scoped(|scope| {
-                loop {
-                    match self.jobs_reader.lock().unwrap().recv() {
-                        Ok(job) => {
-                            println!("JOB START");
-                            scope.execute(move || {
-
-                                match self.run_job(&job) {
-                                    Err(e) => {
-                                        println!("Error processing job: {:?}", e);
-                                    }
-                                    Ok(j) => j,
-                                };
-
-                                // Look mom: I draw a tree!
-                                if let Some(ref response) = job.response {
-                                    let response = response.lock();
-                                    match response {
-                                        Ok(response) => {
-                                            match response.send(()) {
-                                                Ok(()) => (),
-                                                Err(e) => {
-                                                    println!("Error sending response: {:?}", e)
-                                                }
-                                            }
-                                        }
-                                        Err(e) => println!("Error locking mutex: {:?}", e),
-                                    };
-                                };
-                            });
-                        }
-                        Err(e) => {
-                            println!("Job receive error: {:?}", e);
-                            return;
-                        }
-                    };
-                }
-            });
+        Ok(response)
     }
 }
