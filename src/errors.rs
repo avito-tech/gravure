@@ -105,8 +105,11 @@ quick_error! {
         Lock(desc: String) {
             description(desc)
         }
-        HyperError(e: HyperError) {
+        Hyper(e: HyperError) {
             cause(e)
-        } 
+        }
+        SystemTime(e: ::std::time::SystemTimeError) {
+            cause(e)
+        }
     }
 }

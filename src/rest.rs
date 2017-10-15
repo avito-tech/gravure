@@ -18,7 +18,7 @@ use tokio_core::reactor::Handle;
 
 use hyper::{self, StatusCode};
 use hyper::server::{Request, Response, Service};
-
+use slog_scope;
 
 pub struct GravureServer {
     pub config: Arc<Config>,
@@ -80,21 +80,32 @@ impl GravureServer {
         id.hash(&mut hasher);
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .map_err(|e| HttpError::SystemTime(e))?
             .hash(&mut hasher);
         let hash_str = hasher.finish().to_string();
 
         let filename = self.upload_dir.clone() + "/" + &hash_str + ".png";
 
-        let mut file = try!(File::create(filename.clone()).map_err(|e| HttpError::Io(e)));
+        let mut file = File::create(filename.clone())
+            .map_err(|e| HttpError::Io(e))?;
         let chan = self.ch.clone();
+        let client_log = match req.remote_addr() {
+            Some(addr) => format!("{}", addr),
+            None => "unknown".to_string(),
+        };
+
+        let client_log = Arc::new(client_log);
+        let client = client_log.clone();
         let read_body = req.body()
-            .for_each(move |chunk| {
-                          file.write(chunk.as_ref())
-                              .map_err(|e| hyper::Error::Io(e))
-                              .map(|bytes| {
-                                       println!("Received {:?} bytes", bytes);
-                                   })
+            .fold(0, move |bytes, chunk| {
+                // we fold to count bytes received
+                file.write(chunk.as_ref())
+                    .map_err(|e| hyper::Error::Io(e))
+                    .map(|add| bytes + add)
+            })
+            .and_then(move |bytes| {
+                          info!("Received {:?} bytes", bytes; "handler"=>"upload", "client"=>client_log.clone());
+                          Ok(())
                       })
             .and_then(move |_| {
                 let preset = config.presets.get(&preset_name).unwrap();
@@ -106,6 +117,7 @@ impl GravureServer {
                         task: task.clone(),
                         //response: Some(resp),
                         response: None,
+                        client: client.clone(),
                     };
 
                     job.spawn(chan.clone());
@@ -121,12 +133,15 @@ impl GravureServer {
         let filename = "upload/image.png";
         let mut file = try!(File::create(filename).map_err(|e| HttpError::Io(e)));
         let read_body = req.body()
-            .for_each(move |chunk| {
-                          file.write(chunk.as_ref())
-                              .map_err(|e| hyper::Error::Io(e))
-                              .map(|bytes| {
-                                       println!("Received {:?} bytes", bytes);
-                                   })
+            .fold(0, move |bytes, chunk| {
+                // we fold to count bytes received
+                file.write(chunk.as_ref())
+                    .map_err(|e| hyper::Error::Io(e))
+                    .map(|add| bytes + add)
+            })
+            .and_then(move |bytes| {
+                          info!("Received {:?} bytes", bytes; "handler"=>"upload");
+                          Ok(())
                       });
         self.handle.spawn(read_body.then(|_| Ok(())));
         Ok(())
@@ -141,10 +156,20 @@ impl Service for GravureServer {
 
     fn call(&self, req: Request) -> Self::Future {
         let mut resp = Response::new();
+
+        let client_log = match req.remote_addr() {
+            Some(addr) => format!("{}", addr),
+            None => "unknown".to_string(),
+        };
+        slog_scope::scope(&slog_scope::logger()
+                                   .new(slog_o!("scope" => "request handler", "client"=>client_log)),
+                                   || {
         if let Err(_e) = self.route(req) {
-            println!("HTTP ERROR => {}", _e);
+            info!("HTTP server error: {}", _e);
             resp.set_status(StatusCode::BadRequest);
         }
+
         Box::new(ok(resp))
+                                   })
     }
 }

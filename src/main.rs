@@ -16,6 +16,13 @@ extern crate regex;
 extern crate liquid;
 extern crate multipart;
 extern crate num_cpus;
+#[macro_use]
+extern crate slog;
+extern crate slog_term;
+extern crate slog_json;
+extern crate slog_async;
+#[macro_use]
+extern crate slog_scope;
 
 pub mod config;
 pub mod errors;
@@ -37,6 +44,7 @@ use tokio_core::reactor::Core;
 use std::sync::Arc;
 
 use clap::{Arg, App};
+use slog::Drain;
 use hyper::server::Http;
 
 fn main() {
@@ -60,6 +68,16 @@ fn main() {
                  .value_name("NUM")
                  .help("number of threads for resizing pictures (use 0 for auto)")
                  .takes_value(true))
+        .arg(Arg::with_name("loglevel")
+                 .short("v")
+                 .long("verbose")
+                 .value_name("NUM")
+                 .help("logging level")
+                 .takes_value(true))
+        .arg(Arg::with_name("jsonlog")
+                 .short("j")
+                 .long("json")
+                 .help("use json logger"))
         .get_matches();
 
     // Create the event loop that will drive this server
@@ -76,7 +94,44 @@ fn main() {
     if threads == 0 {
         threads = num_cpus::get();
     }
-    let (sender, mut pool) = Pool::builder().pool_size(threads).build();
+
+    let loglevel = matches
+        .value_of("loglevel")
+        .unwrap_or("6")
+        .parse()
+        .unwrap();
+
+    let json = matches.is_present("jsonlog");
+
+    let loglevel = slog::Level::from_usize(loglevel).expect("log level should be 0-6");
+
+    let json_drain = slog_json::Json::default(std::io::stderr())
+        .filter(move |_| json.clone())
+        .fuse();
+
+    let decorator = slog_term::TermDecorator::new().build();
+    let term_drain = slog_term::CompactFormat::new(decorator)
+        .build()
+        .filter(move |_| !json.clone())
+        .fuse();
+
+    let drain = slog::Duplicate::new(json_drain, term_drain).fuse();
+    let drain = slog::LevelFilter::new(drain, loglevel).fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(65536)
+        .build()
+        .fuse();
+
+    let log = slog::Logger::root(drain, o!("version" => env!("CARGO_PKG_VERSION")));
+    let _guard = slog_scope::set_global_logger(log);
+
+    let pool = || Pool::builder().pool_size(threads).build();
+    // but sets logging scope
+    let (sender, mut pool) = slog_scope::scope(&slog_scope::logger()
+                                                    .new(slog_o!("scope" => "threadpool")),
+                                               pool);
+
+    info!("Server starting");
 
     let config = matches.value_of("config").unwrap_or("config_test.json");
     let config = File::open(config).unwrap();
@@ -102,5 +157,4 @@ fn main() {
         .then(|_| Ok::<(), ()>(()));
     core.run(server).unwrap();
     pool.shutdown();
-    //threads.join().unwrap();
 }

@@ -33,7 +33,7 @@ pub struct Task {
 impl Task {
     fn init(&mut self, executor: Sender) -> Result<(), ActionError> {
         for params in &self.actions_raw {
-            try!(params.get(0).ok_or(ActionError::Parameter));
+            params.get(0).ok_or(ActionError::Parameter)?;
             let action = Action::from_params(params, executor.clone()).unwrap();
             self.actions.push(action);
         }
@@ -46,7 +46,7 @@ impl Config {
     pub fn init(&mut self, executor: Sender) -> Result<(), ConfigError> {
         for (_, preset) in &mut self.presets {
             for task in &mut preset.tasks {
-                try!(task.init(executor.clone()).map_err(ConfigError::Init));
+                task.init(executor.clone()).map_err(ConfigError::Init)?;
             }
         }
         Ok(())
@@ -57,12 +57,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use config::*;
-    use errors::*;
-    use image::DynamicImage;
-    use actions::*;
-    use url;
-    use std::collections::HashMap;
-
     use serde_json::from_str;
 
     #[test]
@@ -93,8 +87,11 @@ mod tests {
         }
     }
 }"#;
-        println!("{}", test_config);
-        let mut config: Config = from_str(test_config).unwrap();
-        //        println!("{:?}", config);
+        let config: Config = from_str(test_config).unwrap();
+        assert_eq!(config.presets.len(), 1);
+        let keys = config.presets.keys().collect::<Vec<_>>();
+        assert_eq!(keys, vec!["preset1"]);
+        let tasks = &config.presets.get("preset1").unwrap().tasks;
+        assert_eq!(tasks.len(), 2);
     }
 }
