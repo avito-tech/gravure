@@ -29,11 +29,9 @@ pub struct ImageData {
 
 impl ImageData {
     pub fn new(image_path: String, image_id: u64) -> Result<ImageData, ImageError> {
-        let img = try!(image::open(image_path.clone()));
-        println!("ImageData: IMAGE OK");
+        let img = image::open(image_path.clone())?;
 
-        let image_format = try!(ImageData::get_format(image_path));
-        println!("ImageData: IMAGE FORMAT OK");
+        let image_format = ImageData::get_format(image_path)?;
 
         Ok(ImageData {
                image: img,
@@ -130,7 +128,7 @@ impl Resizer {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Saver {
     path_template: String,
 }
@@ -165,7 +163,7 @@ impl Saver {
         let path = try!(template
                             .render(image_data.id, extension.to_owned())
                             .map_err(|e| ActionError::BadTemplate(e)));
-        println!("SAVING to {:?}", path);
+        info!("SAVING to {:?}", path);
         let mut file = try!(File::create(path).map_err(|e| ActionError::Io(e)));
 
         try!(image_data
@@ -177,7 +175,7 @@ impl Saver {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Uploader {
     path_template: String,
 }
@@ -207,6 +205,7 @@ impl Uploader {
         // let path = &self.path_template;
 
         let uri = try!(Uri::from_str(&path).map_err(|e| ActionError::UrlParse(e)));
+        let uri_log = format!("{:?}", &uri);
         let mut body = Vec::new();
         try!(image_data
                  .image
@@ -221,13 +220,13 @@ impl Uploader {
             let future = client
                 .request(request)
                 .and_then(|ref response| {
-                              if let StatusCode::Ok = response.status() {
-                                  println!("UPLOAD OK");
-                              } else {
-                                  println!("UPLOAD FAILED: {:?}", response);
-                              };
-                              Ok(())
-                          })
+                    if let StatusCode::Ok = response.status() {
+                        debug!("external upload successful"; "uri"=>uri_log);
+                    } else {
+                        debug!("external upload failed"; "response"=>format!("{:?}", &response));
+                    };
+                    Ok(())
+                })
                 .then(|_| Ok(())); // TODO log error
             future
 
@@ -246,8 +245,6 @@ impl Uploader {
         //.write_stream("file", &mut buf.as_slice(), None, None)
         //.unwrap();
         ////        multipart.write_stream("file", &mut buffer, None, None).unwrap();
-
-        //println!("Send file {:?}", image_data.id);
 
         //try!(multipart
         //.send()

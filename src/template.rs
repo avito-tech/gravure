@@ -43,6 +43,6 @@ mod tests {
 
         let res = path.render(1234, "png".to_owned()).unwrap();
 
-        println!("{:?}", res);
+        assert_eq!(res, "http://12.localhost/qwer/1234.png");
     }
 }
